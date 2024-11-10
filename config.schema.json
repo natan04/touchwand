@@ -1,5 +1,5 @@
 {
-  "pluginAlias": "ExampleHomebridgePlugin",
+  "pluginAlias": "TouchwandHomebridgePlugin",
   "pluginType": "platform",
   "singular": true,
   "strictValidation": false,

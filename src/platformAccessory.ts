@@ -1,41 +1,229 @@
-import type { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import { Service, PlatformAccessory, CharacteristicValue, CharacteristicSetCallback, CharacteristicGetCallback, CharacteristicSetHandler } from 'homebridge';
 
-import type { ExampleHomebridgePlatform } from './platform.js';
+import { TouchwandPlatform } from './platform';
 
 /**
  * Platform Accessory
  * An instance of this class is created for each accessory your platform registers
  * Each accessory may expose multiple services of different service types.
  */
-export class ExamplePlatformAccessory {
+export class IFeelShutter {
   private service: Service;
+  private updateTargetInterval: NodeJS.Timeout | null | undefined;
+  private intervalDurationSum = 0;
 
-  /**
-   * These are just used to create a working example
-   * You should implement your own code to track the state of your accessory
-   */
-  private exampleStates = {
-    On: false,
-    Brightness: 100,
+  // Shutter state object.
+  private state = {
+    targetPosition: 0,
+    currentPosition: 0,
   };
-
+  
   constructor(
-    private readonly platform: ExampleHomebridgePlatform,
+    private readonly platform: TouchwandPlatform,
     private readonly accessory: PlatformAccessory,
+    private readonly shutterId: number,
   ) {
+
     // set accessory information
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Default-Manufacturer')
       .setCharacteristic(this.platform.Characteristic.Model, 'Default-Model')
       .setCharacteristic(this.platform.Characteristic.SerialNumber, 'Default-Serial');
 
-    // get the LightBulb service if it exists, otherwise create a new LightBulb service
+    // get the WindowCovering service if it exists, otherwise create a new LightBulb service
     // you can create multiple services for each accessory
-    this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
+    this.service = this.accessory.getService(this.platform.Service.WindowCovering) || 
+                    this.accessory.addService(this.platform.Service.WindowCovering);
+
+    // To avoid "Cannot add a Service with the same UUID another Service without also defining a unique 'subtype' property." error,
+    // when creating multiple services of the same type, you need to use the following syntax to specify a name and subtype id:
+    // this.accessory.getService('NAME') ?? this.accessory.addService(this.platform.Service.Lightbulb, 'NAME', 'USER_DEFINED_SUBTYPE');
 
     // set the service name, this is what is displayed as the default name on the Home app
     // in this example we are using the name we stored in the `accessory.context` in the `discoverDevices` method.
-    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.exampleDisplayName);
+    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
+
+    // each service must implement at-minimum the "required characteristics" for the given service type
+    // see https://developers.homebridge.io/#/service/Lightbulb
+
+    // create handlers for required characteristics.
+    this.service.getCharacteristic(this.platform.Characteristic.CurrentPosition)
+      .on('get', this.handleCurrentPositionGet.bind(this));
+
+    this.service.getCharacteristic(this.platform.Characteristic.TargetPosition)
+      .on('get', this.handleTargetPositionGet.bind(this))
+      .on('set', this.handleTargetPositionSet.bind(this));
+
+    this.service.getCharacteristic(this.platform.Characteristic.PositionState)
+      .on('get', this.handlePositionStateGet.bind(this));
+
+    // Initialize the current position and target position of the shutter.
+    this.platform.touchwandApi.getShutterPosition(this.shutterId).then((position: number) => {
+      this.state.currentPosition = position;
+      this.state.targetPosition = position;
+    });
+  }
+
+  calculateCurrentPositionState(): number {
+    if (this.state.currentPosition > this.state.targetPosition) {
+      // The shutter is: Decreasing.
+      return this.platform.Characteristic.PositionState.DECREASING;
+    } else if (this.state.currentPosition < this.state.targetPosition) {
+      // The shutter is: Increasing.
+      return this.platform.Characteristic.PositionState.INCREASING;
+    } 
+
+    // The shutter is: Stopped. Both target and current possitions are the same.
+    return this.platform.Characteristic.PositionState.STOPPED;
+  }
+
+  clearIntervalSafe() {
+    if (this.updateTargetInterval) {
+      clearInterval(this.updateTargetInterval);
+      // Also really clear the interval parameter so we can later know that we're not running.
+      this.updateTargetInterval = null;
+    }
+  }
+
+  /**
+   * Handle requests to get the current value of the "Current Position" characteristic
+   */
+  handleCurrentPositionGet(callback: CharacteristicGetCallback) {
+    this.platform.log.debug('Triggered GET CurrentPosition');
+
+    this.platform.touchwandApi.getShutterPosition(this.shutterId).then((position: number) => {
+      this.state.currentPosition = position;
+
+      // If we're not currently polling, and the current position doesn't match the target position, this means a change happened outside
+      // the Home app (maybe the person changed the shutter by clicking the physical button).
+      // In this case, we should set the target position to be the current position.
+      if (!this.updateTargetInterval && this.state.currentPosition !== this.state.targetPosition) {
+        this.state.targetPosition = position;
+        this.service.updateCharacteristic(this.platform.Characteristic.TargetPosition, position);
+        this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.calculateCurrentPositionState());
+      }
+
+      callback(null, position);
+    });
+  }
+
+  /**
+   * Handle requests to get the current value of the "Target Position" characteristic
+   */
+  handleTargetPositionGet(callback: CharacteristicGetCallback) {
+    this.platform.log.debug('Triggered GET TargetPosition');
+
+    // We do a call to get the current position, so we can check if we're in sync.
+    this.platform.touchwandApi.getShutterPosition(this.shutterId).then((position: number) => {
+      this.state.currentPosition = position;
+      this.service.updateCharacteristic(this.platform.Characteristic.CurrentPosition, position);
+
+      // If we're not currently polling, and the current position doesn't match the target position, this means a change happened outside
+      // the Home app (maybe the person changed the shutter by clicking the physical button).
+      // In this case, we should set the target position to be the current position.
+      if (!this.updateTargetInterval && this.state.currentPosition !== this.state.targetPosition) {
+        this.state.targetPosition = position;
+        this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.calculateCurrentPositionState());
+      }
+
+      callback(null, this.state.targetPosition);
+    });
+  }
+
+  /**
+   * Handle requests to set the "Target Position" characteristic
+   */
+  handleTargetPositionSet(value: CharacteristicValue, callback: CharacteristicSetCallback) {
+    this.platform.log.debug('Triggered SET TargetPosition:' + value);
+
+    // Save the state locally so we can later return it.
+    this.state.targetPosition = Number(value);
+    // Post the new requested state to the shutter api.
+    this.platform.touchwandApi.postShutterAction(this.shutterId,  Number(value));
+
+    // Make sure we're not currently polling, and if we are cancel it. And clear the intervalDurationSum.
+    this.intervalDurationSum = 0;
+    this.clearIntervalSafe();
+
+    this.updateTargetInterval = setInterval(() => {
+      this.platform.touchwandApi.getShutterPosition(this.shutterId).then((position: number) => {
+        this.intervalDurationSum += 2500;
+        this.state.currentPosition = position;
+        
+        // Update current position and position state characteristics now that we have updated data.
+        this.service.updateCharacteristic(this.platform.Characteristic.CurrentPosition, this.state.currentPosition);
+        this.service.updateCharacteristic(this.platform.Characteristic.PositionState, this.calculateCurrentPositionState());
+        
+        // If we've reached the maximum polling time, stop.
+        if (this.intervalDurationSum >= 60000) {
+          this.platform.log.info(`Stopping polling shutter ${this.shutterId} after max polling time was reached.`);
+          this.clearIntervalSafe();
+        }
+
+        // If the current position matches the target position, we're done.
+        if (this.state.currentPosition === this.state.targetPosition) {
+          this.clearIntervalSafe();
+        }
+
+      });
+    }, 2500);
+
+    callback(null);
+  }
+
+  /**
+   * Handle requests to get the current value of the "Position State" characteristic
+   */
+  handlePositionStateGet(callback: CharacteristicGetCallback) {
+    this.platform.log.debug('Triggered GET PositionState');
+
+    this.platform.touchwandApi.getShutterPosition(this.shutterId).then((position: number) => {
+      this.state.currentPosition = position;
+      callback(null, this.calculateCurrentPositionState());
+    });
+  }
+}
+
+/**
+ * Platform Accessory
+ * An instance of this class is created for each accessory your platform registers
+ * Each accessory may expose multiple services of different service types.
+ */
+export class TouchwandSwitch {
+  private service: Service;
+  private updateTargetInterval: NodeJS.Timeout | null | undefined;
+  private intervalDurationSum = 0;
+
+  // Shutter state object.
+  private state = {
+    targetPosition: 0,
+    currentPosition: 0,
+  };
+  
+  constructor(
+    private readonly platform: TouchwandPlatform,
+    private readonly accessory: PlatformAccessory,
+    private readonly switchID: number,
+  ) {
+
+    // set accessory information
+    this.accessory.getService(this.platform.Service.AccessoryInformation)!
+      .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Default-Manufacturer')
+      .setCharacteristic(this.platform.Characteristic.Model, 'Default-Model')
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, 'Default-Serial');
+
+    // get the WindowCovering service if it exists, otherwise create a new LightBulb service
+    // you can create multiple services for each accessory
+    this.service = this.accessory.getService(this.platform.Service.Lightbulb) || 
+                    this.accessory.addService(this.platform.Service.Lightbulb);
+
+    // To avoid "Cannot add a Service with the same UUID another Service without also defining a unique 'subtype' property." error,
+    // when creating multiple services of the same type, you need to use the following syntax to specify a name and subtype id:
+    // this.accessory.getService('NAME') ?? this.accessory.addService(this.platform.Service.Lightbulb, 'NAME', 'USER_DEFINED_SUBTYPE');
+
+    // set the service name, this is what is displayed as the default name on the Home app
+    // in this example we are using the name we stored in the `accessory.context` in the `discoverDevices` method.
+    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
     // each service must implement at-minimum the "required characteristics" for the given service type
     // see https://developers.homebridge.io/#/service/Lightbulb
@@ -44,98 +232,23 @@ export class ExamplePlatformAccessory {
     this.service.getCharacteristic(this.platform.Characteristic.On)
       .onSet(this.setOn.bind(this)) // SET - bind to the `setOn` method below
       .onGet(this.getOn.bind(this)); // GET - bind to the `getOn` method below
-
-    // register handlers for the Brightness Characteristic
-    this.service.getCharacteristic(this.platform.Characteristic.Brightness)
-      .onSet(this.setBrightness.bind(this)); // SET - bind to the `setBrightness` method below
-
-    /**
-     * Creating multiple services of the same type.
-     *
-     * To avoid "Cannot add a Service with the same UUID another Service without also defining a unique 'subtype' property." error,
-     * when creating multiple services of the same type, you need to use the following syntax to specify a name and subtype id:
-     * this.accessory.getService('NAME') || this.accessory.addService(this.platform.Service.Lightbulb, 'NAME', 'USER_DEFINED_SUBTYPE_ID');
-     *
-     * The USER_DEFINED_SUBTYPE must be unique to the platform accessory (if you platform exposes multiple accessories, each accessory
-     * can use the same subtype id.)
-     */
-
-    // Example: add two "motion sensor" services to the accessory
-    const motionSensorOneService = this.accessory.getService('Motion Sensor One Name')
-      || this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor One Name', 'YourUniqueIdentifier-1');
-
-    const motionSensorTwoService = this.accessory.getService('Motion Sensor Two Name')
-      || this.accessory.addService(this.platform.Service.MotionSensor, 'Motion Sensor Two Name', 'YourUniqueIdentifier-2');
-
-    /**
-     * Updating characteristics values asynchronously.
-     *
-     * Example showing how to update the state of a Characteristic asynchronously instead
-     * of using the `on('get')` handlers.
-     * Here we change update the motion sensor trigger states on and off every 10 seconds
-     * the `updateCharacteristic` method.
-     *
-     */
-    let motionDetected = false;
-    setInterval(() => {
-      // EXAMPLE - inverse the trigger
-      motionDetected = !motionDetected;
-
-      // push the new value to HomeKit
-      motionSensorOneService.updateCharacteristic(this.platform.Characteristic.MotionDetected, motionDetected);
-      motionSensorTwoService.updateCharacteristic(this.platform.Characteristic.MotionDetected, !motionDetected);
-
-      this.platform.log.debug('Triggering motionSensorOneService:', motionDetected);
-      this.platform.log.debug('Triggering motionSensorTwoService:', !motionDetected);
-    }, 10000);
+ 
   }
 
   /**
-   * Handle "SET" requests from HomeKit
-   * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
+   * Handle requests to get the current value of the "Current Position" characteristic
    */
-  async setOn(value: CharacteristicValue) {
-    // implement your own code to turn your device on/off
-    this.exampleStates.On = value as boolean;
+  setOn(value: CharacteristicValue) {
+    this.platform.log.info('Triggered setOn');
 
-    this.platform.log.debug('Set Characteristic On ->', value);
+    if (value as boolean) {
+      this.platform.touchwandApi.postSwitchAction(this.switchID, 255);
+    } else {
+      this.platform.touchwandApi.postSwitchAction(this.switchID, 0);
+    }
   }
 
-  /**
-   * Handle the "GET" requests from HomeKit
-   * These are sent when HomeKit wants to know the current state of the accessory, for example, checking if a Light bulb is on.
-   *
-   * GET requests should return as fast as possible. A long delay here will result in
-   * HomeKit being unresponsive and a bad user experience in general.
-   *
-   * If your device takes time to respond you should update the status of your device
-   * asynchronously instead using the `updateCharacteristic` method instead.
-   * In this case, you may decide not to implement `onGet` handlers, which may speed up
-   * the responsiveness of your device in the Home app.
-
-   * @example
-   * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
-   */
   async getOn(): Promise<CharacteristicValue> {
-    // implement your own code to check if the device is on
-    const isOn = this.exampleStates.On;
-
-    this.platform.log.debug('Get Characteristic On ->', isOn);
-
-    // if you need to return an error to show the device as "Not Responding" in the Home app:
-    // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-
-    return isOn;
-  }
-
-  /**
-   * Handle "SET" requests from HomeKit
-   * These are sent when the user changes the state of an accessory, for example, changing the Brightness
-   */
-  async setBrightness(value: CharacteristicValue) {
-    // implement your own code to set the brightness
-    this.exampleStates.Brightness = value as number;
-
-    this.platform.log.debug('Set Characteristic Brightness -> ', value);
+    return this.platform.touchwandApi.getSwitchState(this.switchID);
   }
 }
