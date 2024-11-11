@@ -19,6 +19,10 @@ export class TouchwandPlatform implements DynamicPlatformPlugin {
   private readonly hubIP: string;
   private readonly email: string;
   private readonly password: string;
+  private readonly authenticationInterval: number = 1000 * 60 * 10;
+
+  public readonly pollingInterval: number;
+
   public readonly touchwandApi: TouchwandAPI;
 
   constructor(
@@ -32,6 +36,8 @@ export class TouchwandPlatform implements DynamicPlatformPlugin {
     this.hubIP = config.hubIP;
     this.email = config.email;
     this.password = config.password;
+    this.pollingInterval = config.pollingInterval ? parseInt(config.pollingInterval) * 1000 : 2500;
+
     this.log.debug('Touchwand Platform initialized with hubIP: %s, email: %s, password: %s', this.hubIP, this.email, this.password);
 
     this.log.debug('Finished initializing platform: ', this.config.name);
@@ -50,7 +56,7 @@ export class TouchwandPlatform implements DynamicPlatformPlugin {
       // Re-authenticate every <authenticationInterval> to keep us logged in.
       setInterval(() => {
         this.touchwandApi.authenticate();
-      }, 1000*60*10);
+      }, this.authenticationInterval);
     });
   }
 
