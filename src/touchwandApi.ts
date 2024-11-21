@@ -51,22 +51,30 @@ export class TouchwandAPI {
     };
 
     this.logger.info('Sending authentication request to i-feel hub.');
-    const response = await this.api.get('auth/login', this.getRequestConfig(params));
-    
-    this.logger.info(`Got authentication response of ${response.status}`);
-    // The cookie will identify us for the next ~30 minutes.
-    this.logger.info('Successfully authenticated with i-feel hub.');
+    try {
+      const response = await this.api.get('auth/login', this.getRequestConfig(params));
+      this.logger.info(`Got authentication response of ${response.status}`);
+      // The cookie will identify us for the next ~30 minutes.
+      this.logger.info('Successfully authenticated with i-feel hub.');
+    } catch(error) {
+      this.logger.warn('Login failed', error);
+    }    
   }
 
+  
   public async postShutterAction(id: number, value: number) {
     const data = {
       id: id,
       value: value,
     };
 
-    this.logger.info(`Posting unit action to i-feel shutter. id ${id}, value: ${value}`);
-    const response = await this.api.post('units/action', data, this.getRequestConfig());
-    this.logger.info(`Got unit action response of ${response.status}`);
+    try {
+      this.logger.info(`Posting unit action to i-feel shutter. id ${id}, value: ${value}`);
+      const response = await this.api.post('units/action', data, this.getRequestConfig());
+      this.logger.info(`Got unit action response of ${response.status}`);  
+    } catch(error) {
+      this.logger.warn('postShutterAction', error);
+    }    
   }
 
   public async getShutterPosition(id: number) {
@@ -74,11 +82,15 @@ export class TouchwandAPI {
       id: id,
     };
 
-    this.logger.info(`Getting unit data for i-feel shutter. id ${id}`);
-    const response = await this.api.get('units/getUnitByID', this.getRequestConfig(params));
-    this.logger.info(`Got unit data response of ${response.status}`);
-
-    return response.data.currStatus;
+    try {
+      this.logger.info(`Getting unit data for i-feel shutter. id ${id}`);
+      const response = await this.api.get('units/getUnitByID', this.getRequestConfig(params));
+      this.logger.info(`Got unit data response of ${response.status}`);
+      return response.data.currStatus;  
+    } catch(error) {
+      this.logger.warn('getShutterPosition error', error);
+      return 0;
+    }   
   }
 
   public async getSwitchState(id: number) {
@@ -86,19 +98,28 @@ export class TouchwandAPI {
       id: id,
     };
 
-    this.logger.info(`Getting unit data for i-feel shutter. id ${id}`);
-    const response = await this.api.get('units/getUnitByID', this.getRequestConfig(params));
-    this.logger.info(`Got unit data response of ${response.status}`);
-
-    return response.data.currStatus > 0;
+    try {
+      this.logger.info(`Getting unit data for i-feel shutter. id ${id}`);
+      const response = await this.api.get('units/getUnitByID', this.getRequestConfig(params));
+      this.logger.info(`Got unit data response of ${response.status}`);
+      return response.data.currStatus > 0;
+    } catch(error) {
+      this.logger.warn('getSwitchState error', error);
+      return false;
+    }   
   }
 
   public async getAllUnits() {
-    this.logger.info('Getting ALL units data from i-feel hub.');
-    const response = await this.api.get('units/listUnits', this.getRequestConfig());
-    this.logger.info(`Got ALL units data response of ${response.status}`);
-
-    return response.data;
+    try {
+      this.logger.info('Getting ALL units data from i-feel hub.');
+      const response = await this.api.get('units/listUnits', this.getRequestConfig());
+      this.logger.info(`Got ALL units data response of ${response.status}`);
+  
+      return response.data;
+    } catch(error) {
+      this.logger.warn('getAllUnits error', error);
+      return {};
+    }  
   }
 
   public async postSwitchAction(id: number, value: number) {
@@ -107,8 +128,13 @@ export class TouchwandAPI {
       value: value,
     };
 
-    this.logger.info(`Posting unit action to touchwant switch. id ${id}, value: ${value}`);
-    const response = await this.api.post('units/action', data, this.getRequestConfig());
-    this.logger.info(`Got unit action response of ${response.status}`);
+    try {
+      this.logger.info(`Posting unit action to touchwant switch. id ${id}, value: ${value}`);
+      const response = await this.api.post('units/action', data, this.getRequestConfig());
+      this.logger.info(`Got unit action response of ${response.status}`);
+    } catch(error) {
+      this.logger.warn('postSwitchAction error', error);
+      return {};
+    } 
   }
 }
