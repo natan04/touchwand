@@ -55,7 +55,7 @@ export class TouchwandAPI {
       const response = await this.api.get('auth/login', this.getRequestConfig(params));
       this.logger.info(`Got authentication response of ${response.status}`);
       // The cookie will identify us for the next ~30 minutes.
-      this.logger.info('Successfully authenticated with i-feel hub.');
+      this.logger.info('Successfully authenticated with touchwand hub.');
     } catch(error) {
       this.logger.warn('Login failed', error);
     }    
