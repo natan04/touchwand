@@ -50,7 +50,7 @@ export class TouchwandAPI {
       psw: this.password,
     };
 
-    this.logger.info('Sending authentication request to i-feel hub.');
+    this.logger.info('Sending authentication request to touchwand hub.');
     try {
       const response = await this.api.get('auth/login', this.getRequestConfig(params));
       this.logger.info(`Got authentication response of ${response.status}`);
